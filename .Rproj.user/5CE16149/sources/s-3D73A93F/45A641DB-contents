@@ -1,0 +1,638 @@
+---
+title: "PEC 1. Análisis de datos ómicos."
+author: "Guillermo Prol Castelo"
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    theme: united
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# I. Abstract.
+
+In this microarray analysis, a study of the effect of chronic ethanol consumption on rat pancreas has been chosen (GEO reference _GSE3311_). In the following, the experiment, data and analysis workflow are described. An in-depth analysis of the microarray is carried out to find out whether there exist any differences between the control and treatment with ethanol groups. It is decided that such a significant difference exist: ethanol had an effect on gene expression.
+
+# II. Objetivos.
+
+Queremos saber si existen diferencias en la expresión genética del páncreas de aquellos ratones que siguieron una dieta con etanol.
+
+# III. Materiales y métodos.
+
+## III.1. Los datos.
+
+Están disponibles a través del identificador _GSE3311_ en _Gene Expression Omnibus (GEO)_. Se trata de un microarray de Affymetrix en el que se analizó la expresión de RNA de los grupos control y de tratamiento. El tratamiento corresponde a una dieta que incluye etanol. Ambas se suministraron a ratones ( _Rattus norvegicus_) durante 8 semanas.
+
+El experimento se diseñó con dos factores, correspondientes al tipo de dieta: control y etanol. Cada tipo de dieta se repitió 3 veces, cada una en 6 ratones (macho) escogidos al azar en un determinado rango de peso (90-120 g). Podemos decir que el diseño del experimento es aleatorio (los factores o dietas se asignaron al azar a las unidades experimentales o ratones).
+
+## III.2. Métodos.
+
+Para analizar los datos del microarray hemos seguido un _workflow_ que comienza por crear todas las carpetas necesarias en el fichero en que nos encontremos. A continuación, obtenemos los datos de GEO y extraemos los ficheros .CEL. Una vez importados a R, podemos explorar estos datos, realizar un control de calidad, normalizarlos y filtrarlos. Una vez hecho esto, podemos anotar los resultados, realizar comparaciones múltiples y un análisis de significación biológica.
+
+## III.3. Librerías, directorios y funciones.
+
+Comenzamos cargando todas las librerías que nos harán falta a lo largo del análisis.
+
+```{r cho = T, results = 'hide'}
+suppressMessages( library(Biobase) )
+suppressMessages( library(GEOquery) )
+suppressMessages( library(affy) )
+suppressMessages( library(limma) )
+suppressMessages( library(annotate) )
+suppressMessages( library(annaffy) )
+suppressMessages( library(gplots) )
+suppressMessages( library(genefilter) )
+suppressMessages( library(oligo) )
+suppressMessages( library(arrayQualityMetrics) )
+suppressMessages( library(ggplot2) )
+suppressMessages( library(ggrepel) )
+suppressMessages( library(gmodels) )
+suppressMessages( library(affyQCReport) )
+```
+
+Para facilitar el estudio, trabajaremos en un directorio escogido por nosotros y cuya localización se asigna a la variable `workingDir`. Los datos se copiarán en un subdirectorio del anterior denominado `data`, que se almacenará en la variable `dataDir` y los resultados se almacenarán en un directorio `results`, cuyo nombre se almacenará en la variable `resultsDir`. También creamos la carpeta `celfiles` para guardar en ella los ficheros .CEL.
+
+```{r}
+workingDir <- getwd()
+# Creamos los directorios de datos y resultados:
+system("mkdir data")
+system("mkdir results")
+system("mkdir celfiles")
+# Los asignamos a variables:
+dataDir <-file.path(workingDir, "data")
+resultsDir <- file.path(workingDir, "results")
+celfilesDir <- file.path(workingDir,"celfiles")
+# Seleccionamos el directorio de trabajo:
+setwd(workingDir)
+```
+
+Cargamos las funciones necesarias para el análisis.
+
+```{r}
+# Declaramos el directorio de funciones:
+functionsDir <- file.path(workingDir, "functions/")
+# Cargamos la función plotPCA.R
+source(file.path(functionsDir,"plotPCA.R"))
+```
+
+
+# IV. Resultados
+
+## IV.1. Obtención y lectura de los datos.
+
+Comenzamos por obtener los datos desde _GEO Accession_:
+
+```{r}
+# Guardamos los datos en una variable en R:
+gse <- getGEO("GSE3311", GSEMatrix = T, destdir = dataDir)
+# Descargamos los datos ('raw data') en la carpeta de datos:
+a <- getGEOSuppFiles("GSE3311",makeDirectory = F, baseDir = dataDir)
+```
+
+Podemos explorar su contenido:
+
+```{r}
+rownames(pData(phenoData(gse[[1]])))
+colnames(pData(phenoData(gse[[1]])))
+head(pData(phenoData(gse[[1]])))
+```
+
+Vemos que los tres primeros ficheros CEL corresponden al tratamiento control y los otros tres al tratamiento con etanol.
+
+
+```{r}
+# get info from gse
+filedata <- pData(phenoData(gse[[1]]))
+sampleNames <- rownames(filedata)
+# get dataframe with .CEL files names:
+file_to_txt <- data.frame(file_name=paste(sampleNames,'.CEL',sep=''),dataDir,filedata)
+# Creamos una tabla con las muestras seleccionadas:
+write.table(file_to_txt, 
+            file=file.path(dataDir, "targets.txt"),
+            sep="\t", 
+            row.names=FALSE, 
+            quote=FALSE)
+```
+
+```{r}
+# Directory the .tar was saved to:
+unpackDir <-  celfilesDir
+# Decompress .tar file:
+untar(file.path(dataDir, 'GSE3311_RAW.tar'), exdir = celfilesDir)
+# Delete .tar file:
+file.remove(file.path(unpackDir, 'GSE18198_RAW.tar'))
+
+# Decompress all .gz files in our directory:
+for (i in list.files(unpackDir)) {
+  gunzip(file.path(unpackDir, i))
+}
+```
+
+Lectura de datos (los cargamos en R):
+```{r}
+#require(Biobase)
+sampleInfo <-read.AnnotatedDataFrame(
+  file.path(dataDir,"targets.txt"), 
+  header = TRUE, row.names = 1) 
+show(pData(sampleInfo))
+```
+
+El contenido del archivo targets se utiliza en la lectura de los datos y la creación del objeto rawData de la clase `affybatch` que contendrá las intensidades “crudas” de cada archivo .CEL.
+
+```{r}
+fileNames <- rownames(pData(sampleInfo))
+rawData <- read.affybatch(filenames=file.path(celfilesDir,fileNames),
+                          phenoData=sampleInfo)
+show(rawData)
+```
+
+
+## IV.2. Exploración, control de calidad y normalización.
+
+Veamos los nombres de cada muestra.
+
+```{r}
+sampleNames <- filedata$title
+sampleNames
+```
+
+Como son muy largos para utilizarlos directamente en los siguientes gráficos, simplificaremos sus nombres:
+
+```{r}
+sampleNames <- c('Control_1','Control_2','Control_3','Ethanol_1','Ethanol_3','Ethanol_3')
+sampleNames
+```
+
+Una forma más computacional de crear este vector sería la siguiente:
+
+```{r}
+dummy_control <- c()
+for (i in 1:3) {
+  dummy_control <- c(dummy_control,paste('Control_',as.character(i),sep = ''))
+}
+
+dummy_ethanol <- c()
+for (i in 1:3) {
+  dummy_ethanol <- c(dummy_ethanol,paste('Ethanol_',as.character(i),sep = ''))
+}
+
+sampleNames <- c(dummy_control,dummy_ethanol)
+sampleNames
+```
+
+Podemos visualizar los datos con varios tipos de gráficos.
+
+```{r}
+plotPCA(exprs(rawData), labels=sampleNames, dataDesc="selected samples")
+```
+
+Distribución de señales:
+
+```{r}
+info <- data.frame(grupo=c(1,1,1,2,2,2))
+
+hist(rawData, main="Signal distribution", col=info$grupo, lty=1:ncol(info))
+legend (x="topright", 
+        legend=sampleNames,#c(rep('Control',3),rep('Ethanol',3)) , 
+        col=info$grupo, lty=1:ncol(info)
+        )
+```
+
+
+Boxplot:
+
+```{r}
+colores <- c(rep("yellow", 3), rep("green", 3))
+boxplot(rawData, cex.axis=0.6, col=colores, las=2, 
+        names=c(rep('Control',3),rep('Ethanol',3)),
+        main="Signal distribution for diets")
+```
+
+Heatmap:
+
+```{r}
+#heatmap:
+manDist <-  dist(t(exprs(rawData))) 
+heatmap (as.matrix(manDist),  col=heat.colors(16),
+         labRow = sampleNames, labCol = sampleNames) 
+```
+
+Dendrograma:
+
+```{r}
+## ----plotDendro
+clust.euclid.average <- hclust(dist(t(exprs(rawData))),method="average")
+plot(clust.euclid.average, labels=sampleNames, main="Hierarchical clustering of samples",  hang=-1)
+```
+
+
+
+### IV.2.1. Control de calidad.
+
+El paquete affyQCReport encapsula los análisis que pueden realizarse con el paquete simpleaffy, de forma que con una instrucción se pueden realizar todos los análisis y enviar la salida a un archivo.
+
+```{r}
+stopifnot(require(affyQCReport))
+QCReport(rawData,file=file.path(resultsDir,"QCReport.pdf"))
+```
+
+El paquete affyPLM realiza un control de calidad basado en lo que se conoce como modelos a nivel de sonda o probe-level models, conocidos por sus siglas (PLM).
+
+```{r}
+stopifnot(require(affyPLM))
+computePLM <- T
+if(computePLM){
+  Pset<- fitPLM(rawData)
+  save(Pset, file=file.path(dataDir,"PLM.Rda"))
+}else{
+  load (file=file.path(dataDir,"PLM.Rda"))
+}
+```
+
+Como resultado del ajuste PLM se pueden obtener dos gráficos, uno de expresiones relativas y otro con errores estandarizados (figura 27). Si los datos son de calidad, ambos gráficos deben ser centrados y relativamente simétricos. Cambios en esta situación sugieren problemas en los arrays que no los verifiquen.
+
+```{r}
+RLE(Pset, main = "Relative Log Expression", names=sampleNames, las=2, col=info$grupo+1, cex.axis=0.6,ylim=c(-5,5))
+```
+
+```{r}
+NUSE(Pset, main = "Normalized Unscaled Standard Errors", las=2, names=sampleNames, col=info$grupo+1, cex.axis=0.6, ylim=c(0.5,1.5))
+```
+
+
+### IV.2.2. Normalización.
+
+El procesado mediante RMA implica un proceso en tres etapas:
+
+- Corrección de fondo (el RMA hace precisamente esto).
+
+- Normalización para hacer los valores de los arrays comparables.
+
+- Resumen (sumarización) de las diversas sondas asociadas a cada grupo de sondas para dar un único valor.
+
+```{r}
+stopifnot(require(affy))
+normalize <- T
+if(normalize){
+  eset_rma <- affy::rma(rawData)    
+  save(eset_rma, file=file.path(dataDir,"normalized.Rda"))
+}else{
+  load (file=file.path(dataDir,"normalized.Rda"))
+}
+```
+
+Un boxplot de los valores normalizados sugiere que los valores ya están en una escala en donde se pueden comparar.
+
+
+```{r}
+boxplot(eset_rma,main="RMA", names=sampleNames, cex.axis=0.7, col=info$grupo+1,las=2)
+```
+
+### IV.2.3. Control de calidad de los datos normalizados.
+
+El paquete affyQCReport encapsula los análisis que pueden realizarse con el paquete simpleaffy, de forma que con una instrucción se pueden realizar todos los análisis y enviar la salida a un archivo.
+
+```{r}
+# Guardamos el informe en el fichero de resultados:
+QCReport(ReadAffy(eset_rma),file=file.path(resultsDir,"QCReport_normalized.pdf"))
+```
+
+El paquete affyPLM realiza un control de calidad basado en lo que se conoce como modelos a nivel de sonda o probe-level models, conocidos por sus siglas (PLM).
+
+```{r}
+stopifnot(require(affyPLM))
+computePLM <- T
+if(computePLM){
+  Pset<- fitPLM(eset_rma)
+  save(Pset, file=file.path(dataDir,"PLM_normalized.Rda"))
+}else{
+  load (file=file.path(dataDir,"PLM_normalized.Rda"))
+}
+```
+
+Como resultado del ajuste PLM se pueden obtener dos gráficos, uno de expresiones relativas y otro con errores estandarizados (figura 27). Si los datos son de calidad, ambos gráficos deben ser centrados y relativamente simétricos. Cambios en esta situación sugieren problemas en los arrays que no los verifiquen.
+
+```{r}
+RLE(Pset, main = "Relative Log Expression", names=sampleNames, las=2, col=info$grupo+1, cex.axis=0.6,ylim=c(-5,5))
+```
+
+```{r}
+NUSE(Pset, main = "Normalized Unscaled Standard Errors", las=2, names=sampleNames, col=info$grupo+1, cex.axis=0.6, ylim=c(0.5,1.5))
+```
+
+### IV.2.4. Filtraje.
+
+El filtraje no específico permite eliminar los genes que varían poco entre condiciones o que deseamos quitar por otras razones, como por ejemplo que no disponemos de anotación para ellos. La función nsFilter permite eliminar los genes que, o bien varían poco, o bien no se dispone de anotación para ellos.
+
+Si al filtrar deseamos usar las anotaciones, o la falta de ellas, como criterio de filtraje, debemos disponer del correspondiente paquete de anotaciones.
+
+En nuestro caso, tenemos que instalar el paquete 'rae230a.db':
+```{r cho = T, results = 'hide'}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("rae230a.db")
+```
+
+
+```{r}
+filtered <- nsFilter(eset_rma, require.entrez=TRUE,
+                     remove.dupEntrez=TRUE, var.func=IQR,
+                     var.cutoff=0.5, var.filter=TRUE,
+                     filterByQuantile=TRUE, feature.exclude="^AFFX")
+class(filtered)
+names(filtered)
+dim(exprs(filtered$eset))
+```
+
+La función `nsFilter` devuelve los valores filtrados en un objeto `expressionSet` y un informe de los resultados del filtraje.
+
+```{r}
+class(filtered$eset)
+print(filtered$filter.log)
+eset_filtered <-filtered$eset
+```
+
+Podemos grabar el objeto `eset_rma` y los datos filtrados para su posterior uso.
+
+```{r}
+# Guardamos en el directorio de resultados:
+save(eset_rma, eset_filtered, file=file.path(resultsDir, "data-normalized.Rda"))
+```
+
+Después del filtraje han quedado 5227 genes disponibles para analizar.
+
+
+## IV.3. Selección de genes diferencialmente expresados.
+
+### IV.3.1. Análisis basado en modelos lineales.
+
+**Matriz de diseño**:
+
+Manualmente:
+
+Tomamos como modelo lineal el siguiente:
+$$
+Y_{ij}=\alpha_i + \epsilon_{ij}
+$$
+
+Donde $\alpha_i$ tiene en cuenta el tipo de tratamiento, es decir:
+$$
+\left\{\begin{matrix}
+\alpha_1=(Control)\\ 
+\alpha_2=(Ethanol)\\ 
+\end{matrix}\right.
+$$
+
+Por tanto, la matriz de diseño es:
+$$
+\begin{pmatrix}
+1 & 0 \\ 
+1 & 0 \\ 
+1 & 0 \\ 
+0 & 1 \\ 
+0 & 1 \\ 
+0 & 1 \\ 
+\end{pmatrix}
+$$
+La escribimos en forma de código:
+
+```{r}
+design.1<-matrix(
+c(1,1,1,0,0,0,
+  0,0,0,1,1,1),
+nrow=6,
+byrow=F)
+colnames(design.1)<-c("Control", "Ethanol")
+rownames(design.1) <-  sampleNames
+print(design.1)
+```
+
+
+Computacionalmente, utilizando el paquete `limma`.
+```{r}
+if (!exists("eset_rma"))  load(file.path(dataDir, "normalized.rda"))
+targets <- pData(eset_rma)
+```
+
+```{r}
+lev<-factor(c(rep('Control',3),rep('Ethanol',3)), 
+            levels=c('Control','Ethanol')
+            )
+design <-model.matrix(~0+lev)
+colnames(design)<-levels(lev)
+rownames(design) <- sampleNames
+print(design)
+```
+
+Vemos que coincide con nuestra propuesta.
+
+**Contrastes**:
+
+En este caso, nos interesa estudiar el efecto del etanol en la dieta de los ratones, es decir, la diferencia entre la dieta con etanol y la dieta control.
+
+Lo podemos formular como:
+$$
+\beta=\alpha_2-\alpha_1 \rightarrow  efecto\; del \; etanol
+$$
+La matriz de contraste correspondiente es, simplemente:
+
+$$
+\bigl(\begin{smallmatrix}
+1 & -1
+\end{smallmatrix}\bigr)
+$$
+Esta se puede hallar también de forma computacional:
+
+```{r}
+cont.matrix <- makeContrasts (
+  Diet = Ethanol - Control,
+  levels=design
+  )
+cont.matrix
+```
+
+También coincide con nuestra matriz de contraste.
+
+**Estimación del modelo y selección de genes.**
+
+Una vez definida la matriz de diseño y los contrastes, podemos pasar a estimar el modelo, estimar los contrastes y realizar las pruebas de significación que nos indiquen, para cada gen y cada comparación, si puede considerarse diferencialmente expresado.
+
+El análisis proporciona los estadísticos de test habituales como _Fold-change_, t-moderados o p-valores ajustados, que se utilizan para ordenar los genes de más a menos diferencialmente expresados.
+
+La función `topTable` genera para cada contraste una lista de genes ordenados de más a menos diferencialmente expresados.
+
+```{r}
+# Linear model fit:
+
+fit<-lmFit(eset_rma, design)
+fit.main<-contrasts.fit(fit, cont.matrix)
+fit.main<-eBayes(fit.main)
+```
+```{r}
+topTab  <- topTable (fit.main, number=nrow(fit.main) , coef="Diet", adjust="fdr")
+```
+
+Una forma de visualizar los resultados es mediante un _volcano plot_, que representa en abscisas los cambios de expresión en escala logarítmica, y en ordenadas el “menos logaritmo” del p-valor o alternativamente el estadístico B. Los genes cuyo _log odds_ es superior a 0 y cuyo _log fold change_ es, en valor absoluto, superior a 1, son candidatos a estar diferencialmente expresados.
+
+```{r}
+coefnum = 1
+opt <- par(cex.lab = 0.7)
+volcanoplot(fit.main, coef=coefnum, highlight=0, names=rownames(fit.main), 
+            main=paste("Differentially expressed genes",colnames(cont.matrix)[coefnum], sep="\n"))
+abline(v=c(-1,1))
+```
+
+Vemos que hay varios puntos a la izquierda de -1 y a la derecha de 1. 
+
+### IV.3.2. Comparaciones múltiples.
+
+Cuando se realizan varias comparaciones a la vez puede resultar importante ver qué genes cambian simultáneamente en más de una comparación. Si el número de comparaciones es alto, también puede ser necesario realizar un ajuste de p-valores entre las comparaciones, distinto del realizado entre genes.
+
+La función `decidetests` permite realizar ambas cosas. En este caso no se ajustarán los p-valores entre comparaciones. Tan solo se seleccionarán los genes que cambian en una o más condiciones.
+
+El resultado del análisis es una tabla, que llamaremos `res` y que para cada gen y cada comparación contiene un 1 (si el gen esta sobreexpresado o _up_ en esta condición), un 0 (si no hay cambio significativo) o un -1 (si está _down_ regulado).
+
+```{r}
+require('rae230a.db')
+anotPackage <- annotation(eset_rma)
+fit.Symbols <- getSYMBOL (rownames(fit.main), anotPackage)
+res<-decideTests(fit.main, method="separate", adjust.method="fdr", p.value=0.01)
+```
+
+
+```{r}
+sum.res.rows<-apply(abs(res),1,sum)
+res.selected<-res[sum.res.rows!=0,]
+print(summary(res))
+```
+
+
+
+### IV.3.3. Anotación de resultados.
+
+Para saber qué anotaciones están disponibles, debe cargarse el paquete y llamar la función del mismo nombre.
+
+```{r}
+rae230a()
+```
+
+**Tablas de anotación sencillas.**
+
+El paquete `annafy` permite de forma muy simple generar una tabla de anotaciones con hiperenlaces a las bases de datos para cada anotación seleccionada.
+
+```{r}
+#require(annaffy)
+genesSelected <- rownames(res.selected)
+at <- aafTableAnn(genesSelected, "rae230a.db")
+saveHTML (at, file.path(resultsDir, "anotations.html"),
+          "Annotations for selected genes")
+```
+
+
+### IV.3.4. Visualización de los perfiles de expresión.
+
+Tras seleccionar los genes diferencialmente expresados, podemos visualizar las expresiones de cada gen agrupándolas para destacar los genes que se encuentran up o down regulados simultáneamente constituyendo perfiles de expresión.
+
+Hay distintas formas de visualización, pero aquí tan solo se presenta el uso de mapas de color o Heatmaps.
+
+En primer lugar seleccionamos los genes a visualizar: se toman todos aquellos que han resultado diferencialmente expresados en alguna de las tres comparaciones.
+
+```{r}
+probeNames<-rownames(res)
+probeNames.selected<-probeNames[sum.res.rows!=0]
+exprs2cluster <-exprs(eset_rma)[probeNames.selected,]
+```
+
+Para representar el Heatmap solo necesitamos la matriz de datos resultante.
+
+```{r}
+grupColors <- c('red','salmon','pink','navy','blue','cyan')
+heatmap(exprs2cluster, col=rainbow(100), ColSideColors=grupColors, cexCol=0.9)
+```
+
+Si se desea realizar mapas de color más sofisticados, puede utilizarse el paquete gplots que implementa una versión mejorada en la función `heatmap.2`.
+
+```{r}
+
+#grupColors <- unlist(lapply(pData(eset_rma)$dataDir, color.map))
+
+#require("gplots")
+
+heatmap.2(exprs2cluster, 
+          col=bluered(75), scale="row",
+          ColSideColors=grupColors, key=TRUE, symkey=FALSE, 
+          density.info="none", trace="none", cexCol=1)
+```
+
+### IV.3.5. Análisis de significación biológica.
+
+Vamos a estudiar las funciones de los genes buscando sus anotaciones en bases de datos de anotación funcional como la Gene Ontology (GO).
+
+Antes de empezar a hacer inferencias sobre el significado de una anotación debería poderse establecer si dicha anotación está relacionada con el proceso que se está estudiando o aparece por azar entre la muchas anotaciones de losgenes de la lista. 
+
+Para ello, realizamos un análisis de enriquecimiento con Bioconductor.
+
+```{r}
+ require(GOstats)
+ require(rae230a.db)
+
+ 
+   # Seleccionamos la "topTable"
+   topTab <- topTab
+   # Definimos el universo de genes: todos los que se han incluido en el analisis
+   # EL programa trabaja con identificadores "entrez" y no admite duplicados
+ 
+   entrezUniverse <- unique(getEG(as.character(rownames(topTab)), "rae230a.db"))
+ 
+   # Filtramos posibles NA:
+   entrezUniverse <- entrezUniverse[!is.na(entrezUniverse)]
+   
+   # Escogemos los grupos de sondas a incluir en el analisis
+   # Este analisis trabaja bien con varios centenares de genes
+   # por lo que es habitual basarse en p-valores sin ajustar para incluirlos
+ 
+   whichGenes<-topTab["adj.P.Val"]<0.001
+   geneIds <-   unique(getEG(as.character(rownames(topTab)[whichGenes[,1]]),"rae230a.db"))
+ 
+   # Filtramos posibles NA:
+   geneIds <- geneIds[!is.na(geneIds)]
+   
+   # Creamos los "hiperparametros" en que se basa el analisis
+   GOparams = new("GOHyperGParams",
+     geneIds=geneIds, universeGeneIds=entrezUniverse,
+     annotation="rae230a.db", ontology="BP",
+     pvalueCutoff=0.001, conditional=FALSE,
+     testDirection="over")
+   KEGGparams = new("KEGGHyperGParams",
+     geneIds=geneIds, universeGeneIds=entrezUniverse,
+     annotation="rae230a.db",
+     pvalueCutoff=0.01, testDirection="over")
+ 
+   # Ejecutamos los analisis
+ 
+   GOhyper = hyperGTest(GOparams)
+   KEGGhyper = hyperGTest(KEGGparams)
+ 
+ # Creamos un informe html con los resultados
+    comparison = "Diet"
+    GOfilename =file.path(resultsDir,
+      paste("GOResults.",comparison,".html", sep=""))
+    KEGGfilename =file.path(resultsDir,
+      paste("KEGGResults.",comparison,".html", sep=""))
+   htmlReport(GOhyper, file = GOfilename, summary.args=list("htmlLinks"=TRUE))
+   htmlReport(KEGGhyper, file = KEGGfilename, summary.args=list("htmlLinks"=TRUE))
+```
+
+
+
+# V.Discusión.
+
+En este análisis hemos visto que existen diferencias significativas entre la expresión génica de los grupos según estos fuesen tratados con o sin etanol. Sin embargo, al principio del análisis vimos cómo en el dendograma no se distinguían los grupos según su tratamiento. 
+
+Una limitación importante de nuestro análisis es que en el análisis de significación biológica sólo se ha hallado una única entrada de Gene Ontology. Quizás cabería la posibilidad de ser más flexibles con nuestro p-valor, hasta un 1% o 5%.

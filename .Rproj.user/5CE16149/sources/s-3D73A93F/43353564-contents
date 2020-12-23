@@ -1,0 +1,96 @@
+---
+title: "PEC 2. Análisis de datos ómicos."
+author: "Guillermo Prol Castelo"
+date: "`r format(Sys.time(), '%d/%m/%y')`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    theme: united
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# I. Abstract.
+
+
+
+
+
+# II. Objetivos.
+
+
+
+
+# III. Materiales y métodos.
+
+## III.1. Los datos.
+
+
+## III.2. Métodos.
+
+
+## III.3. Librerías, directorios y funciones.
+
+
+
+# IV. Resultados
+
+## IV.1. Obtención y lectura de los datos.
+
+
+## IV.2. Exploración, control de calidad y normalización.
+
+
+### IV.2.1. Control de calidad.
+
+
+
+### IV.2.2. Normalización.
+
+
+
+### IV.2.3. Control de calidad de los datos normalizados.
+
+
+
+### IV.2.4. Filtraje.
+
+
+
+## IV.3. Selección de genes diferencialmente expresados.
+
+### IV.3.1. Análisis basado en modelos lineales.
+
+**Matriz de diseño**:
+
+
+**Contrastes**:
+
+
+**Estimación del modelo y selección de genes.**
+
+
+### IV.3.2. Comparaciones múltiples.
+
+
+### IV.3.3. Anotación de resultados.
+
+
+**Tablas de anotación sencillas.**
+
+
+### IV.3.4. Visualización de los perfiles de expresión.
+
+
+### IV.3.5. Análisis de significación biológica.
+
+
+
+
+# V.Discusión.
+
+
