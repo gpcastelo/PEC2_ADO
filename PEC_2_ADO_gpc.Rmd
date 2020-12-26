@@ -111,6 +111,22 @@ Relación nombre de las columnas con las células analizadas (buscando en GEO):
 - SRX008333: B cells rep_1
 - SRX008334: B cells rep_2
 
+Vamos a renombrar las columnas para saber a qué célula y repetición se refieren:
+
+```{r}
+# Cambiamos los nombres de las columnas de la tabla:
+colnames(count.table) <- c("B1","B2","H1","H2")
+# Vemos cómo han cambiado:
+colnames(count.table)
+
+```
+
+Almacenamos la información del tipo de célula (B o H) en un vector `cond.type`:
+
+```{r}
+cond.type <- c("B","B","H","H")
+```
+
 
 ## IV.2. Exploración, control de calidad y normalización.
 
@@ -122,7 +138,7 @@ count.table <- count.table[rowSums(count.table) > 0,]
 dim(count.table)
 ```
 
-
+Hemos pasado de 52580 genes a 9010.
 
 
 **Análisis descriptivo**:
@@ -131,8 +147,8 @@ dim(count.table)
 dim(count.table)
 
 ## we can draw an histogram of all values.
-#col <- c("green","orange")[as.numeric(cond.type)] ## Define colors for subsequent plots
-#show(col)
+col <- c("green","orange")[as.numeric(cond.type)] ## Define colors for subsequent plots
+show(col)
 hist(as.matrix(count.table))
 
 ## The histogram is not very informative  due to the presence of a few very high ## ## count values, that impose a very large scale onthe X axis. 
@@ -162,32 +178,130 @@ pairs(log2(count.table + 1), panel=plotFun, lower.panel = NULL)
 
 ### IV.2.1. Control de calidad.
 
+```{r}
+library("DESeq")
+## Use the newCountDataSet function to create a CountDataSet object
+cds <-  newCountDataSet(count.table, cond.type )
+show(cds)
+
+## What kind of object is it ?
+is(cds)
+isS4(cds)
+
+## What does it contain ?
+slotNames(cds)
+```
 
 
 ### IV.2.2. Normalización.
 
+```{r}
+### Let's implement such a function
+### cds is a countDataset
+
+estimSf <- function (cds){
+    # Get the count matrix
+    cts <- counts(cds)
+    
+    # Compute the geometric mean
+    geomMean <- function(x) prod(x)^(1/length(x))
+
+    # Compute the geometric mean over the line
+    gm.mean  <-  apply(cts, 1, geomMean)
+    
+    # Zero values are set to NA (avoid subsequentcdsdivision by 0)
+    gm.mean[gm.mean == 0] <- NA
+    
+    # Divide each line by its corresponding geometric mean
+    # sweep(x, MARGIN, STATS, FUN = "-", check.margin = TRUE, ...)
+    # MARGIN: 1 or 2 (line or columns)
+    # STATS: a vector of length nrow(x) or ncol(x), depending on MARGIN
+    # FUN: the function to be applied
+    cts <- sweep(cts, 1, gm.mean, FUN="/")
+    
+    # Compute the median over the columns
+    med <- apply(cts, 2, median, na.rm=TRUE)
+    
+    # Return the scaling factor
+    return(med)
+    
+}
+
+  
+## Normalizing with using the method for an object of class"CountDataSet" 
+cds.norm <-  estimateSizeFactors(cds)
+sizeFactors(cds.norm)
+
+## Now get the scaling factor with our homemade function.cds.norm
+estimSf(cds) 
+round(estimSf(cds),6) == round(sizeFactors(cds.norm), 6)
+
+## Checking the normalization
+par(mfrow=c(1,2),cex.lab=0.7)
+boxplot(log2(counts(cds.norm)+1),  col=col, cex.axis=0.7, las=2)
+boxplot(log2(counts(cds.norm, normalized=TRUE)+1),  col=col, cex.axis=0.7, las=2) 
+```
 
 
-### IV.2.3. Control de calidad de los datos normalizados.
+```{r}
+## Performing estimation of dispersion parameter
+ cds.norm <- estimateDispersions(cds.norm)
 
-
-
-### IV.2.4. Filtraje.
-
+## A diagnostic plot which
+## shows the mean of normalized counts (x axis)
+## and dispersion estimate for each genes
+plotDispEsts(cds.norm)
+```
 
 
 ## IV.3. Selección de genes diferencialmente expresados.
 
-### IV.3.1. Análisis basado en modelos lineales.
+### IV.3.1. 
 
-**Matriz de diseño**:
+```{r}
+## Perform differential expression call
+res <- nbinomTest(cds.norm, "B", "H")
 
+## What is the object returned by nbinomTest()
+is(res) # a data.frame
+head(res)
 
-**Contrastes**:
+## The column names of the data.frame
+## Note the column padj 
+## contains FDR values (computed Benjaminiâ???"Hochberg procedure)
+colnames(res)
 
+## Order the table by decreasing p-valuer
+res <- res[order(res$padj),]
+head(res)
 
-**Estimación del modelo y selección de genes.**
+```
 
+```{r}
+## We select gene names based on FDR (1%)
+gene.kept <- res$id[res$padj <= 0.01 & !is.na(res$padj)]
+
+## We retrieve the normalized counts for gene of interest
+count.table.kept <- log2(count.table + 1)[gene.kept, ]
+dim(count.table.kept)
+
+## Install the gplots library if needed then load it
+if(!require("gplots")){
+  install.packages("gplots")
+}
+library("gplots")
+
+## Perform the hierarchical clustering with
+heatmap.2(as.matrix(count.table.kept), 
+          scale="row", 
+          hclust=function(x) hclust(x,method="average"), 
+          distfun=function(x) as.dist((1-cor(t(x)))/2), 
+          trace="none", 
+          density="none", 
+          labRow="",
+          cexCol=0.7)
+
+```
 
 ### IV.3.2. Comparaciones múltiples.
 
@@ -195,7 +309,7 @@ pairs(log2(count.table + 1), panel=plotFun, lower.panel = NULL)
 ### IV.3.3. Anotación de resultados.
 
 
-**Tablas de anotación sencillas.**
+
 
 
 ### IV.3.4. Visualización de los perfiles de expresión.
