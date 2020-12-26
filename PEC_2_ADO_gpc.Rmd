@@ -29,21 +29,127 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## III.1. Los datos.
 
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE25030
 
 ## III.2. Métodos.
 
 
 ## III.3. Librerías, directorios y funciones.
 
+Comenzamos cargando todas las librerías que nos harán falta a lo largo del análisis.
 
+```{r cho = T, results = 'hide'}
+suppressMessages( library(Biobase) )
+suppressMessages( library(GEOquery) )
+suppressMessages( library(affy) )
+suppressMessages( library(limma) )
+suppressMessages( library(Glimma) )
+suppressMessages( library(annotate) )
+suppressMessages( library(annaffy) )
+suppressMessages( library(gplots) )
+suppressMessages( library(genefilter) )
+suppressMessages( library(oligo) )
+suppressMessages( library(arrayQualityMetrics) )
+suppressMessages( library(ggplot2) )
+suppressMessages( library(ggrepel) )
+suppressMessages( library(gmodels) )
+suppressMessages( library(affyQCReport) )
+suppressMessages( library(edgeR) )
+suppressMessages( library(RColorBrewer) )
+suppressMessages( library(pasilla) )
+suppressMessages( library(DESeq2) )
+```
+
+Para facilitar el estudio, trabajaremos en un directorio escogido por nosotros y cuya localización se asigna a la variable `workingDir`. Los datos se copiarán en un subdirectorio del anterior denominado `data`, que se almacenará en la variable `dataDir` y los resultados se almacenarán en un directorio `results`, cuyo nombre se almacenará en la variable `resultsDir`. También creamos la carpeta `celfiles` para guardar en ella los ficheros .CEL.
+
+```{r}
+workingDir <- getwd()
+# Creamos los directorios de datos y resultados:
+#system("mkdir results")
+#system("mkdir celfiles")
+# Los asignamos a variables:
+dataDir <-file.path(workingDir, "datasets")
+resultsDir <- file.path(workingDir, "results")
+#celfilesDir <- file.path(workingDir,"celfiles")
+# Seleccionamos el directorio de trabajo:
+setwd(workingDir)
+```
+
+Cargamos las funciones necesarias para el análisis.
+
+```{r}
+# Declaramos el directorio de funciones:
+functionsDir <- file.path(workingDir, "functions/")
+# Cargamos la función plotPCA.R
+source(file.path(functionsDir,"plotPCA.R"))
+```
 
 # IV. Resultados
 
 ## IV.1. Obtención y lectura de los datos.
 
+```{r}
+load(file.path(dataDir,"dataset2_eset.RData"))
+```
+
+```{r}
+count.table <- read.table(file.path(dataDir,"dataset2_count_table.txt"), header=TRUE, sep="\t", row.names=1, quote="", comment.char="")
+dim(count.table)
+head(count.table)
+colnames(count.table)
+```
+
+El objeto `count.table` contiene información sobre los genes (un gen por fila), cuyas  columnas contienen información sobre el número de lecturas que se alinean con el gen en cada muestra experimental.
+
+
 
 ## IV.2. Exploración, control de calidad y normalización.
 
+**Filtrar**:
+
+```{r}
+## Some genes were not detected at all in these samples. We will discard them.
+count.table <- count.table[rowSums(count.table) > 0,]
+dim(count.table)
+```
+
+
+
+
+**Análisis descriptivo**:
+```{r}
+## Dimensions
+dim(count.table)
+
+## we can draw an histogram of all values.
+#col <- c("green","orange")[as.numeric(cond.type)] ## Define colors for subsequent plots
+#show(col)
+hist(as.matrix(count.table))
+
+## The histogram is not very informative  due to the presence of a few very high ## ## count values, that impose a very large scale onthe X axis. 
+## We can use a logarithmic transformation to improve the readability. 
+## Note that we will add pseudo count to avoid
+## problems with "zero" counts observed for some genes in some samples. 
+
+## Data distribution in log scale.
+## Note that a pseudo count is added before logarithmic transformation
+hist(as.matrix(log2(count.table + 1)),  breaks=100)
+
+## Boxplot
+boxplot(log2(count.table + 1))
+
+## Density
+## We will require one function from the affy package
+#if(!require("affy")){
+#  BiocManager::install("affy")
+#  
+#}
+
+
+## Let's have a look at the scatter plots using the pairs() function
+plotFun <- function(x,y){ dns <- densCols(x,y); points(x,y, col=dns, pch=".") }
+pairs(log2(count.table + 1), panel=plotFun, lower.panel = NULL)
+```
 
 ### IV.2.1. Control de calidad.
 
