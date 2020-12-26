@@ -29,7 +29,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## III.1. Los datos.
 
-https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE25030
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE11892
+
+https://pubmed.ncbi.nlm.nih.gov/18599741/
+
 
 ## III.2. Métodos.
 
@@ -89,11 +92,11 @@ source(file.path(functionsDir,"plotPCA.R"))
 ## IV.1. Obtención y lectura de los datos.
 
 ```{r}
-load(file.path(dataDir,"dataset2_eset.RData"))
+load(file.path(dataDir,"dataset4_eset.RData"))
 ```
 
 ```{r}
-count.table <- read.table(file.path(dataDir,"dataset2_count_table.txt"), header=TRUE, sep="\t", row.names=1, quote="", comment.char="")
+count.table <- read.table(file.path(dataDir,"dataset4_count_table.txt"), header=TRUE, sep="\t", row.names=1, quote="", comment.char="")
 dim(count.table)
 head(count.table)
 colnames(count.table)
