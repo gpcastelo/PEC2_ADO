@@ -104,6 +104,12 @@ colnames(count.table)
 
 El objeto `count.table` contiene información sobre los genes (un gen por fila), cuyas  columnas contienen información sobre el número de lecturas que se alinean con el gen en cada muestra experimental.
 
+Relación nombre de las columnas con las células analizadas (buscando en GEO):
+
+- SRX008331: HEK293T cells rep_1
+- SRX008332: HEK293T cells rep_2
+- SRX008333: B cells rep_1
+- SRX008334: B cells rep_2
 
 
 ## IV.2. Exploración, control de calidad y normalización.
