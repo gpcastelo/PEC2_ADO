@@ -16,26 +16,32 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # I. Abstract.
 
-
-
-
+In this microarray analysis, a study on the sensitivity of two human-cell types (HEK and B cells) has been chosen (GEO reference GSE11892). In the following, the experiment, data, and analysis workflow are described. An in-depth analysis of the microarray is carried out through Next-Generation Sequencing techniques to know whether the sensitivity of cells is different.
 
 # II. Objetivos.
 
-
-
+Queremos saber si existen diferencias en la expresión genética de dos tipos de células humanas: HEK y B.
 
 # III. Materiales y métodos.
 
 ## III.1. Los datos.
 
-https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE11892
+Están disponibles a través del identificador GSE11892 en Gene Expression Omnibus (GEO). Se trata de un microarray (obtenido a través de _high throughput sequencing_) en el que se analizó la expresión de RNA de los grupos de células B y HEK humanas. Para evaluar si los valores son un indicador fiable sobre la actividad génica, se correlaron con ocupación de RNA polymerase II (PolIIa) hipofosforilado, utilizado como marcador del inicio de transcripción.
 
-https://pubmed.ncbi.nlm.nih.gov/18599741/
+Más información disponible en: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE11892
 
 
 ## III.2. Métodos.
 
+Para analizar los datos del microarray hemos seguido un workflow que comienza por crear todas las carpetas necesarias en el fichero en que nos encontremos. A continuación, obtenemos los datos de GEO que se nos proporcionaron para realizar este análisis. Una vez importados a R, podemos explorar estos datos, realizar un control de calidad, normalizarlos y filtrarlos. Una vez hecho esto, podemos anotar los resultados, realizar comparaciones múltiples y un análisis de significación biológica.
+
+El workflow sigue los pasos estándar para un análisis de RNAseq analysis, tal y como se describe en la siguiente figura, obtenida de DOI: [10.1186/s12864-015-1876-7](https://doi.org/10.1186/s12864-015-1876-7).
+
+```{r RNAseqPipeline, echo=FALSE}
+knitr::include_graphics("figures/Workflow-for-RNA-seq-data-analysis.png")
+```
+
+Cabe recordar que es común empezar el workflow desde la tabla de cuentas ( _counts table_ ) que resulta del paso de cuantificación de genes, como es nuestro caso.
 
 ## III.3. Librerías, directorios y funciones.
 
@@ -60,53 +66,51 @@ suppressMessages( library(affyQCReport) )
 suppressMessages( library(edgeR) )
 suppressMessages( library(RColorBrewer) )
 suppressMessages( library(pasilla) )
+suppressMessages( library(DESeq) )
 suppressMessages( library(DESeq2) )
 suppressMessages( library(AnnotationDbi) )
 suppressMessages( library(org.Hs.eg.db) )
 ```
 
-Para facilitar el estudio, trabajaremos en un directorio escogido por nosotros y cuya localización se asigna a la variable `workingDir`. Los datos se copiarán en un subdirectorio del anterior denominado `data`, que se almacenará en la variable `dataDir` y los resultados se almacenarán en un directorio `results`, cuyo nombre se almacenará en la variable `resultsDir`. También creamos la carpeta `celfiles` para guardar en ella los ficheros .CEL.
+Para facilitar el estudio, trabajaremos en un directorio escogido por nosotros y cuya localización se asigna a la variable `workingDir`. Los datos se encuentran en un subdirectorio del anterior denominado `data`, que se almacenará en la variable `dataDir` y los resultados se almacenarán en un directorio `results`, cuyo nombre se almacenará en la variable `resultsDir`.
 
 ```{r}
 workingDir <- getwd()
 # Creamos los directorios de datos y resultados:
 #system("mkdir results")
-#system("mkdir celfiles")
+
 # Los asignamos a variables:
 dataDir <-file.path(workingDir, "datasets")
 resultsDir <- file.path(workingDir, "results")
-#celfilesDir <- file.path(workingDir,"celfiles")
+
 # Seleccionamos el directorio de trabajo:
 setwd(workingDir)
-```
-
-Cargamos las funciones necesarias para el análisis.
-
-```{r}
-# Declaramos el directorio de funciones:
-functionsDir <- file.path(workingDir, "functions/")
-# Cargamos la función plotPCA.R
-source(file.path(functionsDir,"plotPCA.R"))
 ```
 
 # IV. Resultados
 
 ## IV.1. Obtención y lectura de los datos.
 
-```{r}
-load(file.path(dataDir,"dataset4_eset.RData"))
-```
+Cargamos los datos del dataset 4, que hemos escogido para realizar este análisis, que consiste en una tabla de conteo o _count table_:
 
 ```{r}
+# Creamos la tabla a partir del fichero:
 count.table <- read.table(file.path(dataDir,"dataset4_count_table.txt"), header=TRUE, sep="\t", row.names=1, quote="", comment.char="")
+
+# Estudiamos sus dimensiones:
 dim(count.table)
-head(count.table)
+
+
+# Nombre de columnas:
 colnames(count.table)
+
+# Y echamos un vistazo a los primeros registros:
+head(count.table)
 ```
 
 El objeto `count.table` contiene información sobre los genes (un gen por fila), cuyas  columnas contienen información sobre el número de lecturas que se alinean con el gen en cada muestra experimental.
 
-Relación nombre de las columnas con las células analizadas (buscando en GEO):
+Relación nombre de las columnas con las células analizadas (buscando en la información dada en GEO GSE11892):
 
 - SRX008331: HEK293T cells rep_1
 - SRX008332: HEK293T cells rep_2
@@ -132,98 +136,116 @@ cond.type <- c("B","B","H","H")
 
 ## IV.2. Exploración, control de calidad y normalización.
 
-**Filtrar**:
+**Filtrado**.
+
+Los genes con recuentos muy bajos en todas las bibliotecas proporcionan poca evidencia en la expresión diferencial e interfieren con algunas de las aproximaciones estadísticas que se utilizan más adelante dentro del pipeleine del análisis.
+
+Estos genes deben filtrarse antes de un análisis posterior.
 
 ```{r}
-## Some genes were not detected at all in these samples. We will discard them.
+# Descartamos los genes que no se detectaron en la muestra:
 count.table <- count.table[rowSums(count.table) > 0,]
+
+# Ahora nuestra tabla contiene menos filas:
 dim(count.table)
 ```
 
 Hemos pasado de 52580 genes a 9010.
 
 
-**Análisis descriptivo**:
-```{r}
-## Dimensions
-dim(count.table)
 
-## we can draw an histogram of all values.
-col <- c("green","orange")[as.numeric(cond.type)] ## Define colors for subsequent plots
-show(col)
+**Análisis descriptivo**:
+
+Vamos a realizar un pequeño estudio descriptivo del dataset a analizar
+
+```{r}
+# Histograma (distribución) de count.table:
+col <- c("green","green","orange","orange") ## Definimos los colores necesarios para los subsiguientes gráficos
 hist(as.matrix(count.table))
 
-## The histogram is not very informative  due to the presence of a few very high ## ## count values, that impose a very large scale onthe X axis. 
-## We can use a logarithmic transformation to improve the readability. 
-## Note that we will add pseudo count to avoid
-## problems with "zero" counts observed for some genes in some samples. 
+# No es muy informativo debido a la presencia de unos pocos conteos muy elevados, 
+# que resulta en una escala muy grande en el eje x. 
 
-## Data distribution in log scale.
-## Note that a pseudo count is added before logarithmic transformation
-hist(as.matrix(log2(count.table + 1)),  breaks=100)
+# Usaremos una transformación logarítmica para lograr una merjor legibilidad. 
 
-## Boxplot
-boxplot(log2(count.table + 1))
+# Distribución en escala logarítmica:
+hist(as.matrix(log2(count.table + 1)),  breaks=100, col=col)
 
-## Density
-## We will require one function from the affy package
-#if(!require("affy")){
-#  BiocManager::install("affy")
-#  
-#}
+# Boxplot log:
+boxplot(log2(count.table + 1), col=col)
 
-
-## Let's have a look at the scatter plots using the pairs() function
+# Scatter plots:
 plotFun <- function(x,y){ dns <- densCols(x,y); points(x,y, col=dns, pch=".") }
 pairs(log2(count.table + 1), panel=plotFun, lower.panel = NULL)
 ```
 
-**Counts to DGEList**:
+Los gráficos de dispersión para cada par de columnas del conjunto de datos muestran un “grado de reproducibilidad” alto entre muestras del mismo tipo celular: todos los puntos están alineados a lo largo de la diagonal, con una dispersión relativamente más ancha en la parte inferior, que corresponde a pequeñas fluctuaciones numéricas.
+
+Por el contrario, en todas los gráficos que comparan células, podemos ver algunos puntos (genes) descartados de la diagonal, en el lado de la muestra con células HEK o B.
+
+**DGEList**:
+
+A continuación crearemos un objeto DGEList a partir de `count.table`. Este es un objeto utilizado por edgeR para almacenar datos de recuento.
 
 ```{r}
 y <- DGEList(count.table)
-# have a look at y
+# Echamos un vistazo:
 y
-# See what slots are stored in y
+# Mostramos los nombres almacenados:
 names(y)
-# Library size information is stored in the samples slot
+# La información sobre el tamaño de la librería se guarda en la variable samples:
 y$samples
 ```
 
 
 ### IV.2.1. Control de calidad.
 
-**Library sizes and distribution plots**:
+Ahora que hemos eliminado los genes de baja expresión y hemos almacenado nuestros conteos en un objeto DGEList, vamos a llevar a cabo algunos gráficos que nos permitan realizar un pequeño informe de los mismos.
+
+**Tamaño de las librerías y gráficos de distribuciones**.
+
+Verificamos cuántas lecturas tenemos para cada muestra en el objeto creado:
 
 ```{r}
 y$samples$lib.size
 ```
 
+Graficamos estos números en un diagrama de barras para ver si hay discrepancias importantes entre las muestras:
+
 ```{r}
-# The names argument tells the barplot to use the sample names on the x-axis
-# The las argument rotates the axis names
-barplot(y$samples$lib.size,names=colnames(y),las=2)
-# Add a title to the plot
+barplot(y$samples$lib.size,names=colnames(y),las=2,col=col)
 title("Barplot of library sizes")
 ```
+
+Los “ounting data” (datos de recuento) no se distribuyen segun una Distribución Normal, por lo que si queremos examinar las distribuciones de los recuentos sin procesar, utilizaremos Boxplots para verificar la distribución de los recuentos de lectura en escala log2.
+
+Podemos usar la función `cpm` para obtener recuentos de log2 por millón, corregidos por los library sizes (tamaños de biblioteca). La función cpm también incorpora una pequeña “modificación” para evitar el problema asociado al logaritmo de valores de cero.
 
 ```{r}
 # Get log2 counts per million
 logcounts <- cpm(y,log=TRUE)
 # Check distributions of samples using boxplots
-boxplot(logcounts, xlab="", ylab="Log2 counts per million",las=2)
+boxplot(logcounts, xlab="", ylab="Log2 counts per million",las=2, col=col)
 # Let's add a blue horizontal line that corresponds to the median logCPM
 abline(h=median(logcounts),col="blue")
 title("Boxplots of logCPMs (unnormalised)")
 ```
 
-**Multidimensional scaling plots**:
+De los boxplots, vemos que las distribuciones del counting no son muy diferentes.
+
+**Multidimensional scaling (MDS) plot**.
+
+Un MDSplot es un gráfico, que nos permite “visualizar” variabilidad en los datos. Si su experimento está bien “controlado”" y funcionó bien, lo que esperamos ver es que las principales fuentes de variación en los datos sean los grupos que nos interesan.
+
+También nos puede ayudar en la visualización de valores atípicos. Podemos usar la función `plotMDS` para crear el diagrama de MDS.
 
 ```{r}
 plotMDS(y,col=c("purple","purple", "orange", "orange"))
 ```
 
-**Hierarchical clustering with heatmaps**:
+**Clustering jerárquico con heatmaps**.
+
+La representación a través de un _heatmap_ nos permite obtener la representación del cluster jerárquico de las muestras.
 
 ```{r}
 # We estimate the variance for each row in the logcounts matrix
@@ -241,50 +263,40 @@ head(highly_variable_lcpm)
 mypalette <- brewer.pal(11,"RdYlBu")
 morecols <- colorRampPalette(mypalette)
 # Set up colour vector for celltype variable
-col.cell <- c("purple","purple","orange","orange")
+col.cell <- col
 
 # Plot the heatmap
-heatmap.2(highly_variable_lcpm,col=rev(morecols(50)),trace="none", main="Top most variable genes across samples",ColSideColors=col.cell,scale="row")
+heatmap.2(highly_variable_lcpm,col=rev(morecols(50)),trace="none", main="Variability of genes across samples",ColSideColors=col.cell,scale="row")
 ```
 
-
-
-
-______________________________
-
 ```{r}
-library("DESeq")
-## Use the newCountDataSet function to create a CountDataSet object
-cds <-  newCountDataSet(count.table, cond.type )
-show(cds)
-
-## What kind of object is it ?
-is(cds)
-isS4(cds)
-
-## What does it contain ?
-slotNames(cds)
+# Guardamos heatmap
+png(file=file.path(resultsDir,"High_var_genes.heatmap.png"))
+heatmap.2(highly_variable_lcpm,col=rev(morecols(50)),trace="none", main="Variability of genes across samples",ColSideColors=col.cell,scale="row")
+dev.off()
 ```
 
 
 ### IV.2.2. Normalización.
 
+El procesos de normalización denominado TMM se realiza para eliminar los sesgos de composición (bias compostion) entre las bibliotecas.
+
+Este método genera un conjunto de factores de normalización, donde el producto de estos factores y los tamaños de la biblioteca definen el tamaño efectivo de la biblioteca.
+
+La función `calcNormFactors` calcula los factores de normalización entre bibliotecas.
+
 ```{r}
-# Apply normalisation to DGEList object
+# Aplicamos la normalización al objeto DGEList:
 y <- calcNormFactors(y)
 ```
+
+Factores de normalización para estas muestras:
 
 ```{r}
 y$samples
 ```
 
-```{r}
-par(mfrow=c(1,2))
-plotMD(logcounts,column = 1)
-abline(h=0,col="grey")
-plotMD(logcounts,column = 3)
-abline(h=0,col="grey")
-```
+Los gráficos de “diferencia de medias”" muestran la expresión promedio (media: eje x) contra los cambios log-fold (diferencia: eje y).
 
 ```{r}
 par(mfrow=c(1,2))
@@ -295,69 +307,6 @@ abline(h=0,col="grey")
 ```
 
 
-
-
-
-__________________________
-```{r}
-### Let's implement such a function
-### cds is a countDataset
-
-estimSf <- function (cds){
-    # Get the count matrix
-    cts <- counts(cds)
-    
-    # Compute the geometric mean
-    geomMean <- function(x) prod(x)^(1/length(x))
-
-    # Compute the geometric mean over the line
-    gm.mean  <-  apply(cts, 1, geomMean)
-    
-    # Zero values are set to NA (avoid subsequentcdsdivision by 0)
-    gm.mean[gm.mean == 0] <- NA
-    
-    # Divide each line by its corresponding geometric mean
-    # sweep(x, MARGIN, STATS, FUN = "-", check.margin = TRUE, ...)
-    # MARGIN: 1 or 2 (line or columns)
-    # STATS: a vector of length nrow(x) or ncol(x), depending on MARGIN
-    # FUN: the function to be applied
-    cts <- sweep(cts, 1, gm.mean, FUN="/")
-    
-    # Compute the median over the columns
-    med <- apply(cts, 2, median, na.rm=TRUE)
-    
-    # Return the scaling factor
-    return(med)
-    
-}
-
-  
-## Normalizing with using the method for an object of class"CountDataSet" 
-cds.norm <-  estimateSizeFactors(cds)
-sizeFactors(cds.norm)
-
-## Now get the scaling factor with our homemade function.cds.norm
-estimSf(cds) 
-round(estimSf(cds),6) == round(sizeFactors(cds.norm), 6)
-
-## Checking the normalization
-par(mfrow=c(1,2),cex.lab=0.7)
-boxplot(log2(counts(cds.norm)+1),  col=col, cex.axis=0.7, las=2)
-boxplot(log2(counts(cds.norm, normalized=TRUE)+1),  col=col, cex.axis=0.7, las=2) 
-```
-
-
-```{r}
-## Performing estimation of dispersion parameter
- cds.norm <- estimateDispersions(cds.norm)
-
-## A diagnostic plot which
-## shows the mean of normalized counts (x axis)
-## and dispersion estimate for each genes
-plotDispEsts(cds.norm)
-```
-
-
 ## IV.3. Selección de genes diferencialmente expresados.
 
 ### IV.3.1. Análisis basado en modelos lineales.
@@ -365,27 +314,29 @@ plotDispEsts(cds.norm)
 **Matriz de diseño**.
 
 ```{r}
-# Look at group variable again
+# Definimos la variable de grupo según el tipo de célula analizada: B o H
 group <- cond.type
 group
 ```
 ```{r}
-# Specify a design matrix without an intercept term
+# Especificamos la matriz de diseño:
 design <- model.matrix(~ 0 + group)
 colnames(design) <- c("B","H")
 design
 ```
 
-**Voom transform the data**:
+**Transformación voom de los datos**.
+
+`voom` estima la tendencia de la varianza respecto a la media en el counting data, para luego asignar un peso a cada observación en función de la predicción de la varianza (segun el modelo que nos da la tendencia). Los pesos se usan luego en el proceso de modelado lineal para ajustar la heterocedasticidad.
+
+Este diagrama es importante ya que nos “informa” de si hay algún gen con “alta variabilidad” en nuestros datos, y sobretodo porque nos indica si hemos filtrado los recuentos bajos adecuadamente.
 
 ```{r}
 par(mfrow=c(1,1))
 v <- voom(y,design,plot = TRUE)
 ```
 
-```{r}
-v
-```
+Ahora podemos comparar los boxplot despues antes y despues de normalizar. Los valores de expresión en `v$E` ya son valores en escala logarítmica log2.
 
 ```{r}
 par(mfrow=c(1,2))
@@ -397,12 +348,11 @@ boxplot(v$E, xlab="", ylab="Log2 counts per million",las=2,main="Voom transforme
 abline(h=median(v$E),col="blue")
 ```
 
-
-
-
-
+Vemos como en el caso de los datos transformados por `voom` la dispersión de los datos es menor.
 
 **Matriz de contrastes**:
+
+Queremos saber si existen diferencias entre el tipo de células:
 
 ```{r}
 cont.matrix <- makeContrasts(Cell=B-H,levels=design)
@@ -411,13 +361,19 @@ cont.matrix
 
 ### IV.3.2. Comparaciones múltiples.
 
-**Testing for differential expression**:
+**Test de expresión diferencial**.
+
+Ahora que tenemos los datos obtenidos a partir de la función `voom`, podemos usar `limma` para obtener la expresión diferencial. Primero ajustamos un modelo lineal para cada gen usando la función `lmFit` en `limma`. `lmFit` necesita el objeto `voom` y la matriz de diseño que ya hemos especificado, que se encuentra dentro del objeto generado por `voom`:
 
 ```{r}
-# Fit the linear model
+# Fit del modelo lineal:
 fit <- lmFit(v)
 names(fit)
 ```
+
+Lleva a cabo la comparación entre las células HEK y B.
+
+El resultado del análisis es una tabla, que para cada gen y cada comparación contiene un 1 (si el gen esta sobreexpresado o up en esta condición), un 0 (si no hay cambio significativo) o un -1 (si está down regulado).
 
 ```{r}
 fit.cont <- contrasts.fit(fit, cont.matrix)
@@ -427,120 +383,69 @@ summa.fit <- decideTests(fit.cont)
 summary(summa.fit)
 ```
 
-```{r}
-topTable(fit.cont,coef=1,sort.by="p")
-```
-
-
 ### IV.3.3. Anotación de resultados.
 
-Genome wide annotation for Human:
+Como podemos ver la lista de genes significativamente expresados diferencialmente, presenta como única anotación el ID de Entrez Gene, que no es muy informativa.
+
+Por tanto deberemos añadir alguna información de anotación adicional.
+
+Vamos a llevarlo a cabo utilizando `org.Hs.eg.db package`.
 
 ```{r}
-if (!requireNamespace("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
-
-BiocManager::install("org.Hs.eg.db")
-```
-
-```{r}
-library(org.Hs.eg.db)
-```
-
-```{r}
+# Genome-wide annotation for Human:
 columns(org.Hs.eg.db)
 ```
 
 ```{r}
+# Adaptamos los nombres de las filas para poder extraer información:
 example <- as.character(as.numeric(substr(rownames(fit.cont),start=5,stop=15)))
+# Seleccionamos los genes que aparecen en este experimento:
 ann <- select(org.Hs.eg.db,keys=example,columns=c("ENTREZID","SYMBOL","GENENAME"))
+# Primeros registros:
 head(ann)
 ```
 
-```{r}
-table(ann$ENTREZID==example)
-```
 
 ```{r}
 fit.cont$genes <- ann
 topTable(fit.cont,coef=1,sort.by="p")
 ```
 
+Podemos guardar esta tabla en formato _.csv_:
+
 ```{r}
 limma.res <- topTable(fit.cont,coef=1,sort.by="p",n=100)
 write.csv(limma.res,file=file.path(resultsDir,"annotation_results.csv"),row.names=FALSE)
 ```
 
-**Plots after testing for DE (Volcano plot,MAplot)**:
+Es evidente que hay algún error al realizar la tabla de anotaciones, pues el algoritmo no reconoce ningún símbolo ni nombre de gen.
+
+**Gráficos post-test DE (Volcano plot,MAplot)**:
 
 ```{r}
-# We want to highlight the significant genes. We can get this from decideTests.
+# Queremos destacar los genes significativos:
 par(mfrow=c(1,2))
 plotMD(fit.cont,coef=1,status=summa.fit[,1], values = c(-1, 1))
 
-# For the volcano plot we have to specify how many of the top genes to highlight.
-# We can also specify that we want to plot the gene symbol for the highlighted genes.
-# let's highlight the top 100 most DE genes
+# Para el volcano plot tenemos que especificar cuántos genes 'top' queremos destacar.
 volcanoplot(fit.cont,coef=1,highlight=100,names=fit.cont$genes$SYMBOL)
 ```
 
 ### IV.3.4. Análisis de significación biológica.
 
-```{r}
-require(GOstats)
+Análisis de ontología genética (GO) utilizando la función `goana` en `limma`.
+
+```{r error=TRUE}
+go <- goana(fit.cont, coef=1,species = "Hs")
+topGO(go, n=10)
 ```
 
-```{r}
-require(org.Hs.eg.db)
-
- 
-   # Seleccionamos la "topTable"
-   topTab <- topTable(fit.cont,coef=1,sort.by="p")
-   # Definimos el universo de genes: todos los que se han incluido en el analisis
-   # EL programa trabaja con identificadores "entrez" y no admite duplicados
- 
-   entrezUniverse <- unique(getEG(as.character(rownames(topTab)), "org.Hs.eg.db"))
- 
-   # Filtramos posibles NA:
-   entrezUniverse <- entrezUniverse[!is.na(entrezUniverse)]
-   
-   # Escogemos los grupos de sondas a incluir en el analisis
-   # Este analisis trabaja bien con varios centenares de genes
-   # por lo que es habitual basarse en p-valores sin ajustar para incluirlos
- 
-   whichGenes<-topTab["adj.P.Val"]<0.001
-   geneIds <-   unique(getEG(as.character(rownames(topTab)[whichGenes[,1]]),"org.Hs.eg.db"))
- 
-   # Filtramos posibles NA:
-   geneIds <- geneIds[!is.na(geneIds)]
-   
-   # Creamos los "hiperparametros" en que se basa el analisis
-   GOparams = new("GOHyperGParams",
-     geneIds=geneIds, universeGeneIds=entrezUniverse,
-     annotation="org.Hs.eg.db", ontology="BP",
-     pvalueCutoff=0.001, conditional=FALSE,
-     testDirection="over")
-   KEGGparams = new("KEGGHyperGParams",
-     geneIds=geneIds, universeGeneIds=entrezUniverse,
-     annotation="org.Hs.eg.db",
-     pvalueCutoff=0.01, testDirection="over")
- 
-   # Ejecutamos los analisis
- 
-   GOhyper = hyperGTest(GOparams)
-   KEGGhyper = hyperGTest(KEGGparams)
- 
- # Creamos un informe html con los resultados
-    comparison = "Diet"
-    GOfilename =file.path(resultsDir,
-      paste("GOResults.",comparison,".html", sep=""))
-    KEGGfilename =file.path(resultsDir,
-      paste("KEGGResults.",comparison,".html", sep=""))
-   htmlReport(GOhyper, file = GOfilename, summary.args=list("htmlLinks"=TRUE))
-   htmlReport(KEGGhyper, file = KEGGfilename, summary.args=list("htmlLinks"=TRUE))
-```
+En este caso no se encuentran genes que coincidan con los hayados en nuestro análisis. Seguramente esto se trate de un error relacionado con el ya mencionado al realizar la tabla de anotaciones.
 
 
 # V.Discusión.
 
+En este análisis hemos visto que no existen diferencias significativas entre la expresión génica de las células humanas HEK y B. 
+
+Una limitación importante de nuestro análisis es que en el análisis de significación biológica no hemos hallado ninguna entrada de Gene Ontology. Esto se debe seguramente a un error al realizar la tabla de anotaciones en el apartado IV.3.3.
 
